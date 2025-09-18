@@ -1,0 +1,64 @@
+# setup.yml
+- hosts: servers
+  gather_facts: true
+  become: true
+  serial: 1
+  vars:
+    script_path: /root/setupRHEL.sh
+    change_mark: /var/run/setupRHEL.changed
+    reboot_mark: /var/run/setupRHEL.reboot
+
+  pre_tasks:
+    - name: Ensure yum-utils (for needs-restarting fallback)
+      ansible.builtin.yum:
+        name: yum-utils
+        state: present
+      failed_when: false
+
+  tasks:
+    - name: Copy setup script
+      ansible.builtin.copy:
+        src: /Users/eric/Downloads/setupRHEL.sh
+        dest: "{{ script_path }}"
+        mode: '0755'
+
+    - name: Remove previous markers
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ change_mark }}"
+        - "{{ reboot_mark }}"
+
+    - name: Run setup script (non-interactive)
+      ansible.builtin.command: "{{ script_path }} yes"
+      register: setup_out
+      changed_when: "'CHANGED=1' in setup_out.stdout"
+
+    - name: Check reboot marker (preferred)
+      ansible.builtin.stat:
+        path: "{{ reboot_mark }}"
+      register: reboot_flag
+      changed_when: false
+
+    - name: Fallback check: needs-restarting -r
+      ansible.builtin.command: needs-restarting -r
+      register: reboot_chk
+      failed_when: false
+      changed_when: false
+      when: not reboot_flag.stat.exists
+
+    - name: Reboot if required
+      ansible.builtin.reboot:
+        msg: "Reboot required by setupRHEL.sh"
+        reboot_timeout: 900
+      when: reboot_flag.stat.exists or reboot_chk.rc == 1
+
+    - name: (Optional) Clean markers after successful run
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ change_mark }}"
+        - "{{ reboot_mark }}"
+      when: reboot_flag.stat.exists == false
